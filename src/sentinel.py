@@ -17,6 +17,7 @@ from sentinelhub import (
     SentinelHubRequest,
     SHConfig,
 )
+from sentinelhub.geo_utils import bbox_to_dimensions
 
 import config
 
@@ -25,6 +26,24 @@ load_dotenv()  # carga SH_CLIENT_ID / SH_CLIENT_SECRET desde .env si existe
 # resolucion en metros/pixel usada para todas las descargas. 10m alcanza para
 # ndvi/ndwi/cyano con las bandas nativas de sentinel-2 (b02,b03,b04,b08).
 RESOLUTION = 10
+
+# la process api de sentinel hub no acepta mas de 2500px por lado. atitlan es
+# lo bastante grande (~25km) para pasarse de eso a 10m/pixel, asi que hay que
+# limitar el tamano y dejar que la resolucion efectiva suba un poco en vez de
+# que el request falle.
+MAX_SIZE_PX = 2500
+
+# el proyecto usa cuentas del Copernicus Data Space Ecosystem (CDSE), no el
+# sentinel-hub.com comercial clasico, asi que hay que apuntar explicitamente
+# a sus endpoints de auth/servicio.
+CDSE_BASE_URL = "https://sh.dataspace.copernicus.eu"
+CDSE_TOKEN_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
+
+# coleccion de sentinel-2 L2A servida desde CDSE (con DataCollection.SENTINEL2_L2A
+# a secas apunta al servicio comercial y falla con credenciales de CDSE)
+CDSE_SENTINEL2_L2A = DataCollection.SENTINEL2_L2A.define_from(
+    name="s2l2a_cdse", service_url=CDSE_BASE_URL
+)
 
 
 def _build_config() -> SHConfig:
@@ -36,6 +55,8 @@ def _build_config() -> SHConfig:
     sh_config = SHConfig()
     sh_config.sh_client_id = _get_env("SH_CLIENT_ID")
     sh_config.sh_client_secret = _get_env("SH_CLIENT_SECRET")
+    sh_config.sh_base_url = CDSE_BASE_URL
+    sh_config.sh_token_url = CDSE_TOKEN_URL
     return sh_config
 
 
@@ -46,7 +67,7 @@ def _get_env(name: str) -> str:
     if not value or "tu_client_id_aqui" in value or "tu_client_secret_aqui" in value:
         raise EnvironmentError(
             f"falta configurar {name}. copia .env.example a .env y pon tus "
-            f"credenciales reales de https://apps.sentinel-hub.com"
+            f"credenciales reales de https://shapps.dataspace.copernicus.eu/dashboard/"
         )
     return value
 
@@ -60,6 +81,18 @@ def _lake_bbox(lake: str) -> BBox:
         bbox=[coords["west"], coords["south"], coords["east"], coords["north"]],
         crs=CRS.WGS84,
     )
+
+
+def _clamp_size(size: tuple) -> tuple:
+    """si el tamano calculado se pasa del limite de la process api (2500px por
+    lado), lo reduce proporcionalmente manteniendo el aspect ratio del bbox.
+    """
+    width, height = size
+    largest = max(width, height)
+    if largest <= MAX_SIZE_PX:
+        return size
+    scale = MAX_SIZE_PX / largest
+    return (max(1, round(width * scale)), max(1, round(height * scale)))
 
 
 def request_product(lake: str, date: str, evalscript: str, output_path: Path) -> Path:
@@ -83,18 +116,24 @@ def request_product(lake: str, date: str, evalscript: str, output_path: Path) ->
 
     sh_config = _build_config()
     bbox = _lake_bbox(lake)
+    # bbox_to_dimensions calcula el ancho/alto en pixeles a partir del bbox
+    # (en grados, WGS84) y la resolucion real en metros. pasar resolution
+    # directo a SentinelHubRequest con un bbox en grados lo interpreta como
+    # "grados por pixel" y revienta con bboxes gigantes o diminutos.
+    size = bbox_to_dimensions(bbox, resolution=RESOLUTION)
+    size = _clamp_size(size)
 
     request = SentinelHubRequest(
         evalscript=evalscript,
         input_data=[
             SentinelHubRequest.input_data(
-                data_collection=DataCollection.SENTINEL2_L2A,
+                data_collection=CDSE_SENTINEL2_L2A,
                 time_interval=(date, date),
             )
         ],
         responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
         bbox=bbox,
-        resolution=(RESOLUTION, RESOLUTION),
+        size=size,
         config=sh_config,
         data_folder=str(output_path.parent),
     )
