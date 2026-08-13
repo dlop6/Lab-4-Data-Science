@@ -1,0 +1,32 @@
+# credenciales, nunca se versionan
+.env
+
+# entornos virtuales
+.venv/
+venv/
+env/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# datos pesados generados en tiempo de ejecucion (persona 2 los genera localmente,
+# no tiene sentido versionar rasters de varios mb; solo se versiona la estructura
+# via los .gitkeep)
+data/rasters/**/*.tif
+
+# salidas generadas por persona 3, se regeneran corriendo run_temporal_analysis()
+outputs/tables/*.csv
+outputs/figures/*.png
+
+# no ignorar los .gitkeep que mantienen la estructura de carpetas
+!data/rasters/**/.gitkeep
+!outputs/**/.gitkeep
+
+# ides / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
