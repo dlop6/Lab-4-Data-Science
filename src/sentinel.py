@@ -44,6 +44,9 @@ CDSE_TOKEN_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/prot
 CDSE_SENTINEL2_L2A = DataCollection.SENTINEL2_L2A.define_from(
     name="s2l2a_cdse", service_url=CDSE_BASE_URL
 )
+CDSE_SENTINEL2_L1C = DataCollection.SENTINEL2_L1C.define_from(
+    name="s2l1c_cdse", service_url=CDSE_BASE_URL
+)
 
 
 def _build_config() -> SHConfig:
@@ -95,7 +98,7 @@ def _clamp_size(size: tuple) -> tuple:
     return (max(1, round(width * scale)), max(1, round(height * scale)))
 
 
-def request_product(lake: str, date: str, evalscript: str, output_path: Path) -> Path:
+def request_product(lake: str, date: str, evalscript: str, output_path: Path, data_collection=CDSE_SENTINEL2_L2A) -> Path:
     """pide a sentinel hub el producto de una fecha/lago usando el evalscript dado,
     guarda el resultado (tif) en output_path y regresa su Path.
 
@@ -127,7 +130,7 @@ def request_product(lake: str, date: str, evalscript: str, output_path: Path) ->
         evalscript=evalscript,
         input_data=[
             SentinelHubRequest.input_data(
-                data_collection=CDSE_SENTINEL2_L2A,
+                data_collection=data_collection,
                 time_interval=(date, date),
             )
         ],
