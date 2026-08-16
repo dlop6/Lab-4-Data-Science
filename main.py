@@ -16,12 +16,12 @@ def main():
     print("estructura de datos verificada.")
 
     # paso 2: indices (persona 2) - pendiente de implementar
-    # from src.indices import generate_indices
-    # generate_indices()
+    from src.indices import generate_indices
+    generate_indices()
 
     # paso 3: analisis temporal (persona 3) - pendiente de implementar
-    # from src.temporal import run_temporal_analysis
-    # run_temporal_analysis()
+    from src.temporal import run_temporal_analysis
+    run_temporal_analysis()
 
     print("listo. corre 'python scripts/validar_descarga.py' para probar la conexion a sentinel hub.")
 
