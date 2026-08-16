@@ -21,6 +21,7 @@ RASTERS_DIR = DATA_DIR / "rasters"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 TABLES_DIR = OUTPUTS_DIR / "tables"
 FIGURES_DIR = OUTPUTS_DIR / "figures"
+SPATIAL_FIGURES_DIR = FIGURES_DIR / "spatial"
 
 # ---------------------------------------------------------------------------
 # lagos: coordenadas oficiales (bounding box) del pdf del laboratorio
@@ -96,7 +97,16 @@ def raster_dir(lake: str, date: str) -> Path:
     return RASTERS_DIR / lake / date
 
 
+def spatial_figures_dir(lake: str) -> Path:
+    """ruta de la carpeta de mapas espaciales (ejercicio 5) para un lago."""
+    if lake not in LAKES:
+        raise ValueError(f"lago desconocido: {lake}. debe ser uno de {list(LAKES)}")
+    return SPATIAL_FIGURES_DIR / lake
+
+
 def ensure_output_dirs() -> None:
     """crea las carpetas de salida si no existen (idempotente, no rompe nada)."""
-    for d in (GEOJSON_DIR, RASTERS_DIR, TABLES_DIR, FIGURES_DIR):
+    dirs = [GEOJSON_DIR, RASTERS_DIR, TABLES_DIR, FIGURES_DIR]
+    dirs += [spatial_figures_dir(lake) for lake in LAKES]
+    for d in dirs:
         d.mkdir(parents=True, exist_ok=True)

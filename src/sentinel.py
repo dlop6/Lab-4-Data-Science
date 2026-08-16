@@ -6,6 +6,7 @@ persona 2 solo debe importar request_product() y pasarle su propio evalscript
 (ndvi, ndwi o el cyano detection script), sin tocar nada de este archivo.
 """
 
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,6 +33,12 @@ RESOLUTION = 10
 # limitar el tamano y dejar que la resolucion efectiva suba un poco en vez de
 # que el request falle.
 MAX_SIZE_PX = 2500
+
+# retry simple para que una falla transitoria de red/token no tumbe todo el
+# lote de descargas (ya paso una vez). nada de backoff exponencial ni cola,
+# solo 3 intentos con una espera fija chiquita entre cada uno.
+MAX_RETRIES = 3
+RETRY_WAIT_SECONDS = 3.0
 
 # el proyecto usa cuentas del Copernicus Data Space Ecosystem (CDSE), no el
 # sentinel-hub.com comercial clasico, asi que hay que apuntar explicitamente
@@ -142,11 +149,35 @@ def request_product(lake: str, date: str, evalscript: str, output_path: Path, da
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    data = request.get_data(save_data=False)
+    data = _get_data_with_retry(request, lake, date, output_path)
 
     # get_data regresa una lista de arrays (uno por response definida arriba)
     _save_tiff(data[0], bbox, output_path)
     return output_path
+
+
+def _get_data_with_retry(request: SentinelHubRequest, lake: str, date: str, output_path: Path):
+    """llama request.get_data() con hasta MAX_RETRIES intentos.
+
+    si fallan los 3, no se escribe nada a disco (el llamador nunca ve un tif
+    a medias) y se relanza la excepcion original despues de imprimir lago,
+    fecha y producto para poder diagnosticar rapido.
+    """
+    last_error = None
+    for intento in range(1, MAX_RETRIES + 1):
+        try:
+            return request.get_data(save_data=False)
+        except Exception as e:
+            last_error = e
+            print(
+                f"[retry {intento}/{MAX_RETRIES}] fallo request_product("
+                f"{lake}, {date}, producto={output_path.name}): {e}"
+            )
+            if intento < MAX_RETRIES:
+                time.sleep(RETRY_WAIT_SECONDS)
+
+    print(f"[error] {lake} {date} {output_path.name}: se agotaron los {MAX_RETRIES} intentos")
+    raise last_error
 
 
 def _save_tiff(array, bbox: BBox, output_path: Path) -> None:
