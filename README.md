@@ -1,50 +1,41 @@
-# Lab 4 — Análisis de Datos Geoespaciales
+# Laboratorio 4 - Análisis de Datos Geoespaciales
 
-Monitoreo de floraciones de cianobacteria en los lagos Atitlán y Amatitlán usando Sentinel-2 / Sentinel Hub. CC3084 - Data Science, Semestre II 2026.
+Análisis de floraciones de cianobacteria en los lagos Atitlán y Amatitlán mediante imágenes Sentinel-2. Proyecto de CC3084 - Data Science, Universidad del Valle de Guatemala.
 
-## Instalación
+## Informe
+
+El análisis, las figuras, las tablas y las conclusiones se encuentran en el [informe final](./informe_final_lab4.pdf).
+
+## Preparación
 
 ```bash
 python -m venv .venv
-# windows
-.venv\Scripts\activate
-# linux/mac
-source .venv/bin/activate
-
 pip install -r requirements.txt
 ```
 
-Copia `.env.example` a `.env` y coloca tus credenciales de Sentinel Hub (client id / secret, se crean en https://apps.sentinel-hub.com):
-
-```bash
-cp .env.example .env
-```
+Activa el entorno virtual y copia `.env.example` como `.env`. Luego configura allí las credenciales de Sentinel Hub.
 
 ## Ejecución
 
 ```bash
-# valida que la conexión con sentinel hub funciona (requiere .env configurado)
-python scripts/validar_descarga.py
-
-# corre el pipeline completo
 python main.py
+```
+
+El comando ejecuta el flujo completo y guarda los resultados en `outputs/`. Para comprobar únicamente la conexión y una descarga de prueba:
+
+```bash
+python scripts/validar_descarga.py
 ```
 
 ## Estructura
 
-```
-config.py          coordenadas, fechas oficiales y rutas centralizadas
-src/sentinel.py     autenticación y descarga (request_product())
-src/indices.py      NDVI, NDWI, cianobacteria (persona 2)
-src/temporal.py     análisis temporal (persona 3)
-data/geojson/       contorno de cada lago
-data/rasters/       rasters generados por fecha/lago (no se versionan, ver .gitignore)
-outputs/            tabla y gráficas del análisis temporal
+```text
+config.py        configuración central: lagos, fechas y rutas
+main.py          punto de entrada del análisis
+src/             obtención, procesamiento y análisis
+data/geojson/    contornos de los lagos
+data/rasters/    productos NDVI, NDWI y cianobacteria
+outputs/         tablas y figuras generadas
 ```
 
-## Convenciones (no modificar sin acuerdo del grupo)
-
-- Lagos: `atitlan`, `amatitlan`.
-- Fechas: `YYYY-MM-DD`, únicamente las 11 oficiales por lago (`config.DATES`).
-- Rasters: `ndvi.tif`, `ndwi.tif`, `cyano.tif` en `data/rasters/{lake}/{date}/`.
-- CSV temporal: `outputs/tables/temporal_summary.csv` con columnas `lake,date,cyano_mean,valid_pixels`.
+Las fechas oficiales, nombres de los lagos y rutas se definen únicamente en `config.py`.
