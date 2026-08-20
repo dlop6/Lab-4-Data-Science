@@ -30,3 +30,7 @@ outputs/figures/*.png
 .idea/
 .DS_Store
 Thumbs.db
+
+# datasets tabulares pesados generados desde los raster
+data/tabular/**/*.csv
+!data/tabular/**/.gitkeep

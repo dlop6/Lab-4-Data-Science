@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 from rasterio.features import geometry_mask
+from rasterio.warp import reproject, Resampling
 
 import config
 from src.sentinel import request_product
@@ -35,10 +36,10 @@ BANDS_EVALSCRIPT = r"""
 function setup() {
     return {
         input: [{
-            bands: ["B02", "B03", "B04", "B08", "dataMask"]
+            bands: ["B02", "B03", "B04", "B08", "SCL", "dataMask"]
         }],
         output: {
-            bands: 5,
+            bands: 6,
             sampleType: "FLOAT32"
         }
     };
@@ -50,11 +51,11 @@ function evaluatePixel(s) {
         s.B03,
         s.B04,
         s.B08,
+        s.SCL,
         s.dataMask
     ];
 }
 """
-
 
 # ---------------------------------------------------------------------------
 # Rutas
@@ -84,8 +85,13 @@ def download_bands(
 ) -> Path:
     """Descarga B02, B03, B04 y B08 en un unico GeoTIFF.
 
-    La quinta banda corresponde a dataMask y se utiliza solamente para
-    determinar que pixeles tienen datos validos.
+    Las bandas adicionales son:
+    - SCL: Scene Classification Layer, usada para filtrar nubes y pixeles
+    problematicos.
+    - dataMask: indica disponibilidad valida de datos.
+
+    SCL y dataMask se usan solamente para limpieza y no se incluyen como
+    variables finales del dataset.
     """
     output_path = bands_raster_path(lake, date)
 
@@ -141,18 +147,22 @@ def raster_to_dataframe(
     date: str,
     raster_path: Path | None = None,
 ) -> pd.DataFrame:
-    """Convierte un raster multibanda en un DataFrame.
+    """Convierte un raster multibanda en un DataFrame limpio.
 
-    Solo conserva pixeles que:
+    Cada fila representa un pixel geografico valido dentro del lago.
+
+    Se conservan solamente pixeles que:
+    - estan dentro del GeoJSON del lago;
     - tienen dataMask valido;
-    - contienen valores finitos en B02/B03/B04/B08;
-    - se encuentran dentro del GeoJSON del lago.
+    - no pertenecen a clases SCL problematicas;
+    - tienen B02, B03, B04 y B08 finitos;
+    - tienen un valor valido de cianobacteria.
 
     Returns:
         DataFrame con columnas:
 
-        lake, date, b2, b3, b4, b8,
-        longitude, latitude, ndvi, ndwi
+        lake, date, longitude, latitude,
+        b2, b3, b4, b8, ndvi, ndwi, cyano
     """
     if raster_path is None:
         raster_path = bands_raster_path(lake, date)
@@ -164,21 +174,58 @@ def raster_to_dataframe(
             f"no existe el raster multibanda: {raster_path}"
         )
 
+    cyano_path = config.raster_dir(lake, date) / "cyano.tif"
+
+    if not cyano_path.exists():
+        raise FileNotFoundError(
+            f"no existe el raster de cianobacteria: {cyano_path}"
+        )
+
     geometries = load_lake_geometry(lake)
 
     with rasterio.open(raster_path) as src:
-        if src.count != 5:
+        if src.count != 6:
             raise ValueError(
-                f"{raster_path} debe tener 5 bandas; tiene {src.count}"
+                f"{raster_path} debe tener 6 bandas; tiene {src.count}"
             )
 
+        # Bandas espectrales.
         b2 = src.read(1).astype("float32")
         b3 = src.read(2).astype("float32")
         b4 = src.read(3).astype("float32")
         b8 = src.read(4).astype("float32")
-        data_mask = src.read(5)
 
-        # True dentro del poligono del lago.
+        # Capas utilizadas para limpieza.
+        scl = src.read(5)
+        data_mask = src.read(6)
+
+        # -----------------------------------------------------------
+        # Alinear cyano.tif con la grilla del raster de bandas
+        # -----------------------------------------------------------
+
+        cyano = np.full(
+            (src.height, src.width),
+            np.nan,
+            dtype="float32",
+        )
+
+        with rasterio.open(cyano_path) as cyano_src:
+            reproject(
+                source=cyano_src.read(1),
+                destination=cyano,
+                src_transform=cyano_src.transform,
+                src_crs=cyano_src.crs,
+                dst_transform=src.transform,
+                dst_crs=src.crs,
+                resampling=Resampling.nearest,
+                src_nodata=np.nan,
+                dst_nodata=np.nan,
+            )
+
+        # -----------------------------------------------------------
+        # Mascara geografica del lago
+        # -----------------------------------------------------------
+
         lake_mask = geometry_mask(
             geometries,
             out_shape=(src.height, src.width),
@@ -186,16 +233,46 @@ def raster_to_dataframe(
             invert=True,
         )
 
+        # -----------------------------------------------------------
+        # Scene Classification Layer
+        # -----------------------------------------------------------
+        #
+        # Clases que no queremos utilizar:
+        #
+        # 0  = No Data
+        # 1  = Saturated / defective
+        # 3  = Cloud shadows
+        # 8  = Cloud medium probability
+        # 9  = Cloud high probability
+        # 10 = Thin cirrus
+        # 11 = Snow / ice
+
+        invalid_scl = np.isin(
+            scl,
+            [0, 1, 3, 8, 9, 10, 11],
+        )
+
+        # -----------------------------------------------------------
+        # Mascara valida final
+        # -----------------------------------------------------------
+
         valid = (
             lake_mask
             & (data_mask > 0)
+            & (~invalid_scl)
             & np.isfinite(b2)
             & np.isfinite(b3)
             & np.isfinite(b4)
             & np.isfinite(b8)
+            & np.isfinite(cyano)
         )
 
         rows, cols = np.where(valid)
+
+        if rows.size == 0:
+            raise ValueError(
+                f"{lake} {date} no contiene pixeles validos"
+            )
 
         # Coordenadas del centro de cada pixel.
         xs, ys = rasterio.transform.xy(
@@ -205,11 +282,12 @@ def raster_to_dataframe(
             offset="center",
         )
 
-    # Extraemos solo los valores validos.
-    b2_values = b2[valid]
-    b3_values = b3[valid]
-    b4_values = b4[valid]
-    b8_values = b8[valid]
+        # Extraer solamente pixeles validos.
+        b2_values = b2[valid]
+        b3_values = b3[valid]
+        b4_values = b4[valid]
+        b8_values = b8[valid]
+        cyano_values = cyano[valid]
 
     # ---------------------------------------------------------------
     # NDVI
@@ -257,19 +335,25 @@ def raster_to_dataframe(
         {
             "lake": lake,
             "date": date,
+            "longitude": np.asarray(xs),
+            "latitude": np.asarray(ys),
             "b2": b2_values,
             "b3": b3_values,
             "b4": b4_values,
             "b8": b8_values,
-            "longitude": np.asarray(xs),
-            "latitude": np.asarray(ys),
             "ndvi": ndvi,
             "ndwi": ndwi,
+            "cyano": cyano_values,
         }
     )
 
-    return df
+    # Eliminar observaciones donde los indices no pudieron calcularse
+    # debido a denominadores iguales a cero.
+    df = df.dropna(
+        subset=["ndvi", "ndwi"]
+    ).reset_index(drop=True)
 
+    return df
 
 # ---------------------------------------------------------------------------
 # Guardado
@@ -326,15 +410,94 @@ def process_date(
 
     return df
 
+def generate_tabular_dataset() -> pd.DataFrame:
+    """Procesa las fechas oficiales de ambos lagos.
 
-if __name__ == "__main__":
-    # Prueba inicial pequeña: una fecha de Atitlan.
-    df = process_date(
-        "atitlan",
-        "2025-01-18",
+    Para cada lago y fecha:
+    - descarga las bandas si no existen;
+    - construye el DataFrame limpio;
+    - guarda el CSV individual;
+    - acumula las observaciones en un DataFrame global.
+
+    Returns:
+        DataFrame con todas las observaciones validas.
+    """
+    dataframes = []
+
+    for lake in config.LAKES:
+        print("\n" + "=" * 60)
+        print(f"TABULAR: {lake.upper()}")
+        print("=" * 60)
+
+        for date in config.DATES[lake]:
+            print(f"\n[process] {lake} {date}")
+
+            df = process_date(
+                lake,
+                date,
+            )
+
+            print(
+                f"[ok] {lake} {date}: "
+                f"{len(df):,} observaciones validas"
+            )
+
+            dataframes.append(df)
+
+    if not dataframes:
+        raise ValueError(
+            "no se generaron observaciones tabulares"
+        )
+
+    return pd.concat(
+        dataframes,
+        ignore_index=True,
     )
 
-    print()
-    print(df.head())
-    print()
-    print(df.info())
+def print_dataset_summary(df: pd.DataFrame) -> None:
+    """Muestra las estadisticas requeridas por el inciso 1.4."""
+
+    print("\n" + "=" * 60)
+    print("RESUMEN DEL DATASET")
+    print("=" * 60)
+
+    # Total
+    print(
+        f"\nTotal de observaciones: {len(df):,}"
+    )
+
+    # Por lago
+    print("\nObservaciones por lago:")
+    print(
+        df.groupby("lake").size()
+    )
+
+    # Por lago y fecha
+    print("\nObservaciones por lago y fecha:")
+    print(
+        df.groupby(["lake", "date"]).size()
+    )
+
+    # Variables
+    print("\nVariables disponibles:")
+    for column in df.columns:
+        print(f"- {column}")
+
+    # Tipos
+    print("\nTipos de variables:")
+    print(df.dtypes)
+
+    # Missing values
+    print("\nPorcentaje de valores faltantes:")
+
+    missing_percentage = (
+        df.isna().mean() * 100
+    )
+
+    print(
+        missing_percentage.round(4)
+    )
+
+if __name__ == "__main__":
+    df = generate_tabular_dataset()
+    print_dataset_summary(df)
