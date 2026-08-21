@@ -454,6 +454,46 @@ def generate_tabular_dataset() -> pd.DataFrame:
         ignore_index=True,
     )
 
+DATASET_SUMMARY_CSV = config.TABLES_DIR / "dataset_summary.csv"
+DATASET_SUMMARY_BY_LAKE_CSV = config.TABLES_DIR / "dataset_summary_by_lake.csv"
+DATASET_SUMMARY_BY_DATE_CSV = config.TABLES_DIR / "dataset_summary_by_date.csv"
+
+
+def build_dataset_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Arma la tabla del inciso 1.4: una fila por variable, con su tipo y
+    porcentaje de valores faltantes.
+    """
+    rows = []
+    missing_pct = (df.isna().mean() * 100).round(4)
+
+    for column in df.columns:
+        rows.append({
+            "variable": column,
+            "dtype": str(df[column].dtype),
+            "missing_pct": float(missing_pct[column]),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def build_dataset_summary_by_lake(df: pd.DataFrame) -> pd.DataFrame:
+    """Total de observaciones y observaciones por lago (parte del inciso 1.4)."""
+    by_lake = df.groupby("lake").size().reset_index(name="n_observaciones")
+    total_row = pd.DataFrame([{"lake": "TOTAL", "n_observaciones": int(len(df))}])
+    return pd.concat([by_lake, total_row], ignore_index=True)
+
+
+def build_dataset_summary_by_date(df: pd.DataFrame) -> pd.DataFrame:
+    """Observaciones por lago y por fecha (parte del inciso 1.4)."""
+    return (
+        df.groupby(["lake", "date"])
+        .size()
+        .reset_index(name="n_observaciones")
+        .sort_values(["lake", "date"])
+        .reset_index(drop=True)
+    )
+
+
 def print_dataset_summary(df: pd.DataFrame) -> None:
     """Muestra las estadisticas requeridas por el inciso 1.4."""
 
@@ -498,6 +538,32 @@ def print_dataset_summary(df: pd.DataFrame) -> None:
         missing_percentage.round(4)
     )
 
+
+def save_dataset_summary_csv(df: pd.DataFrame) -> tuple[Path, Path, Path]:
+    """Persiste el resumen completo del inciso 1.4 a disco: variables/tipos/
+    faltantes (dataset_summary.csv), total y observaciones por lago
+    (dataset_summary_by_lake.csv), y observaciones por lago y fecha
+    (dataset_summary_by_date.csv). Así no depende de volver a correr el
+    script y leer solo la consola.
+    """
+    config.ensure_output_dirs()
+
+    summary = build_dataset_summary(df)
+    summary.to_csv(DATASET_SUMMARY_CSV, index=False)
+    print(f"[ok] resumen de variables guardado en {DATASET_SUMMARY_CSV}")
+
+    by_lake = build_dataset_summary_by_lake(df)
+    by_lake.to_csv(DATASET_SUMMARY_BY_LAKE_CSV, index=False)
+    print(f"[ok] total y observaciones por lago guardadas en {DATASET_SUMMARY_BY_LAKE_CSV}")
+
+    by_date = build_dataset_summary_by_date(df)
+    by_date.to_csv(DATASET_SUMMARY_BY_DATE_CSV, index=False)
+    print(f"[ok] observaciones por lago y fecha guardadas en {DATASET_SUMMARY_BY_DATE_CSV}")
+
+    return DATASET_SUMMARY_CSV, DATASET_SUMMARY_BY_LAKE_CSV, DATASET_SUMMARY_BY_DATE_CSV
+
+
 if __name__ == "__main__":
     df = generate_tabular_dataset()
     print_dataset_summary(df)
+    save_dataset_summary_csv(df)
