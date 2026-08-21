@@ -18,6 +18,8 @@ DATA_DIR = BASE_DIR / "data"
 GEOJSON_DIR = DATA_DIR / "geojson"
 RASTERS_DIR = DATA_DIR / "rasters"
 
+TABULAR_DIR = DATA_DIR / "tabular"
+
 OUTPUTS_DIR = BASE_DIR / "outputs"
 TABLES_DIR = OUTPUTS_DIR / "tables"
 FIGURES_DIR = OUTPUTS_DIR / "figures"
@@ -106,7 +108,7 @@ def spatial_figures_dir(lake: str) -> Path:
 
 def ensure_output_dirs() -> None:
     """crea las carpetas de salida si no existen (idempotente, no rompe nada)."""
-    dirs = [GEOJSON_DIR, RASTERS_DIR, TABLES_DIR, FIGURES_DIR]
+    dirs = [GEOJSON_DIR, RASTERS_DIR, TABULAR_DIR, TABLES_DIR, FIGURES_DIR]
     dirs += [spatial_figures_dir(lake) for lake in LAKES]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
